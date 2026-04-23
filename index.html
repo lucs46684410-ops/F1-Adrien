@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>F1 Ultimate - Aggressive AI & Fireworks</title>
+    <style>
+        :root { --f1-red: #e74c3c; --gold: #f1c40f; --dark: #121212; }
+        body { margin: 0; background: var(--dark); color: white; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; touch-action: none; }
+        
+        #game-container { position: relative; width: 400px; height: 600px; background: #333; border: 5px solid #444; border-radius: 20px; overflow: hidden; box-shadow: 0 0 50px rgba(0,0,0,0.8); }
+        canvas { display: block; }
+
+        /* Semáforo F1 */
+        #lights-box {
+            position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 10px; padding: 15px; background: #222; border: 3px solid #111; border-radius: 10px; z-index: 25;
+        }
+        .bulb { width: 35px; height: 35px; background: #333; border-radius: 50%; border: 2px solid #000; }
+        .bulb.red { background: #ff0000; box-shadow: 0 0 20px #ff0000; }
+        .bulb.green { background: #2ecc71; box-shadow: 0 0 20px #2ecc71; }
+
+        .screen { position: absolute; inset: 0; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 30; text-align: center; padding: 20px; }
+        
+        .hud { position: absolute; top: 15px; width: 100%; display: flex; justify-content: space-around; z-index: 10; pointer-events: none; }
+        .stat { background: rgba(0,0,0,0.7); padding: 5px 15px; border-radius: 15px; border: 1px solid #555; font-weight: bold; }
+
+        /* Alerta de Recorde */
+        #record-alert { position: absolute; top: 70px; width: 100%; text-align: center; color: var(--gold); font-weight: bold; font-size: 18px; text-shadow: 0 0 10px black; z-index: 15; pointer-events: none; }
+
+        #leaderboard { width: 80%; background: rgba(255,255,255,0.05); border-radius: 10px; padding: 10px; margin: 15px 0; border: 1px solid #444; }
+        .rank-item { display: flex; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid #333; font-size: 14px; }
+        .rank-item.top { color: var(--gold); font-weight: bold; }
+
+        select, button { padding: 12px; margin: 8px; width: 85%; border-radius: 10px; border: none; font-weight: bold; font-size: 16px; }
+        button { background: var(--f1-red); color: white; cursor: pointer; text-transform: uppercase; transition: 0.2s; }
+        button:hover { transform: scale(1.03); }
+
+        #mobile-controls { position: absolute; bottom: 30px; width: 100%; display: flex; justify-content: space-around; z-index: 15; }
+        .ctrl-btn { width: 80px; height: 80px; background: rgba(255,255,255,0.1); border: 2px solid #fff3; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 30px; color: white; }
+        
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="record-alert" class="hidden">✨ PARABÉNS! NOVO RECORDE! ✨</div>
+    
+    <div class="hud hidden" id="hud">
+        <div class="stat">SCORE: <span id="score">0</span></div>
+        <div class="stat" style="color:var(--gold)">BEST: <span id="best">0</span></div>
+    </div>
+
+    <div id="lights-box" class="hidden">
+        <div class="bulb" id="b1"></div>
+        <div class="bulb" id="b2"></div>
+        <div class="bulb" id="b3"></div>
+        <div class="bulb" id="b4"></div>
+        <div class="bulb" id="b5"></div>
+    </div>
+
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+    <div id="mobile-controls" class="hidden">
+        <div id="btn-left" class="ctrl-btn">◀</div>
+        <div id="btn-right" class="ctrl-btn">▶</div>
+    </div>
+
+    <div id="start-screen" class="screen">
+        <h1 style="color:var(--f1-red); margin:0;">F1 PRO SERIES</h1>
+        <div id="leaderboard"><div id="rank-list"></div></div>
+        <label>Dificuldade:</label>
+        <select id="diff-select">
+            <option value="easy">Fácil</option>
+            <option value="medium" selected>Médio</option>
+            <option value="hard">Difícil (IA Agressiva)</option>
+        </select>
+        <button id="start-btn">Iniciar GP</button>
+    </div>
+
+    <div id="lose-screen" class="screen hidden">
+        <h1 id="death-msg" style="color:var(--f1-red); margin:5px;">CRASH!</h1>
+        <p id="death-reason" style="font-size: 14px;"></p>
+        <div id="final-score-box">Pontos: <span id="final-score">0</span></div>
+        <button onclick="location.reload()">Reiniciar</button>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let gameActive = false, racing = false, isNewRecord = false;
+    let score = 0, speed = 6, spawnRate = 0.03, aiAggression = 0.5;
+    let velocityX = 0, tilt = 0, laneOffset = 0;
+    const accel = 0.9, friction = 0.88, maxVel = 9;
+    
+    let enemies = [], keys = {}, fireworks = [];
+    let highScores = JSON.parse(localStorage.getItem('f1_rank_v2')) || [0,0,0,0,0];
+    const player = { x: 180, y: 480, w: 40, h: 85, color: '#e74c3c' };
+
+    function updateRankDisplay() {
+        const list = document.getElementById('rank-list');
+        list.innerHTML = highScores.map((s, i) => `<div class="rank-item ${i === 0 ? 'top' : ''}"><span>${i+1}º LUGAR</span><span>${s} PTS</span></div>`).join('');
+    }
+    updateRankDisplay();
+
+    function drawF1Car(x, y, color, rotation = 0, isEnemy = false) {
+        ctx.save();
+        ctx.translate(x + 20, y + 42);
+        ctx.rotate(rotation);
+        ctx.fillStyle = '#111';
+        ctx.fillRect(-24, -30, 10, 18); ctx.fillRect(14, -30, 10, 18);
+        ctx.fillRect(-24, 20, 12, 22); ctx.fillRect(12, 20, 12, 22);
+        let grad = ctx.createLinearGradient(-12, 0, 12, 0);
+        grad.addColorStop(0, color); grad.addColorStop(0.5, '#fff4'); grad.addColorStop(1, color);
+        ctx.fillStyle = grad;
+        ctx.fillRect(-12, -35, 24, 75);
+        ctx.fillRect(-6, -45, 12, 15);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(-25, -42, 50, 6); ctx.fillRect(-18, 32, 36, 12);
+        ctx.fillStyle = isEnemy ? '#f1c40f' : '#fff';
+        ctx.beginPath(); ctx.arc(0, -5, 6, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+    }
+
+    // --- SISTEMA DE FOGOS ---
+    function createFirework() {
+        const x = Math.random() * canvas.width;
+        const color = `hsl(${Math.random() * 360}, 100%, 50%)`;
+        for(let i=0; i<15; i++) {
+            fireworks.push({ x: x, y: 150, vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10, life: 1, color: color });
+        }
+    }
+
+    function updateFireworks() {
+        fireworks.forEach((p, i) => {
+            p.x += p.vx; p.y += p.vy; p.life -= 0.02;
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill();
+            if(p.life <= 0) fireworks.splice(i, 1);
+        });
+        ctx.globalAlpha = 1;
+    }
+
+    // --- IA AGRESSIVA ---
+    function moveAI(en) {
+        // Se o carro inimigo estiver perto verticalmente do jogador, tenta "derrubar"
+        if (Math.abs(en.y - player.y) < 200) {
+            const targetX = player.x;
+            if (en.x < targetX) en.x += aiAggression;
+            else if (en.x > targetX) en.x -= aiAggression;
+        }
+    }
+
+    function loop() {
+        if (!gameActive) return;
+        ctx.fillStyle = '#333'; ctx.fillRect(0,0,400,600);
+        laneOffset += racing ? speed : 0;
+        if(laneOffset > 60) laneOffset = 0;
+        for(let i=-60; i<600; i+=60) {
+            ctx.fillStyle = (i + laneOffset) % 120 < 60 ? '#fff' : '#e74c3c';
+            ctx.fillRect(0, i+laneOffset, 15, 60); ctx.fillRect(385, i+laneOffset, 15, 60);
+            ctx.fillStyle = '#555'; ctx.fillRect(198, i+laneOffset, 4, 30);
+        }
+
+        if (racing) {
+            if (keys['ArrowLeft'] || keys['a']) { velocityX -= accel; tilt = -0.12; }
+            else if (keys['ArrowRight'] || keys['d']) { velocityX += accel; tilt = 0.12; }
+            else { velocityX *= friction; tilt *= 0.8; }
+            player.x += velocityX;
+            if (player.x <= 15 || player.x >= 345) endGame("Você destruiu o carro no muro lateral!");
+
+            if (Math.random() < spawnRate) {
+                enemies.push({ x: Math.random()*300+25, y: -120, color: `hsl(${Math.random()*360}, 70%, 50%)`, passed: false });
+            }
+        }
+
+        drawF1Car(player.x, player.y, player.color, tilt);
+
+        enemies.forEach(en => {
+            if(racing) {
+                en.y += speed;
+                moveAI(en); // IA age aqui
+            }
+            drawF1Car(en.x, en.y, en.color, 0, true);
+
+            if (player.x < en.x + 30 && player.x + 30 > en.x && player.y < en.y + 75 && player.y + 75 > en.y) {
+                endGame("Colisão fatal! O adversário te tirou da pista.");
+            }
+
+            if (en.y > 600 && !en.passed) {
+                en.passed = true; score++;
+                document.getElementById('score').innerText = score;
+                speed += 0.05;
+
+                // Checar Recorde em tempo real
+                if (score > highScores[0]) {
+                    if (!isNewRecord) {
+                        isNewRecord = true;
+                        document.getElementById('record-alert').classList.remove('hidden');
+                    }
+                    createFirework();
+                }
+            }
+        });
+
+        enemies = enemies.filter(e => e.y < 700);
+        updateFireworks();
+        requestAnimationFrame(loop);
+    }
+
+    function startSequence() {
+        const bulbs = [1,2,3,4,5].map(i => document.getElementById('b'+i));
+        document.getElementById('lights-box').classList.remove('hidden');
+        bulbs.forEach((b, i) => setTimeout(() => b.classList.add('red'), (i+1)*800));
+        setTimeout(() => {
+            bulbs.forEach(b => { b.classList.remove('red'); b.classList.add('green'); });
+            racing = true;
+            setTimeout(() => document.getElementById('lights-box').classList.add('hidden'), 1000);
+        }, 5500);
+    }
+
+    function endGame(reason) {
+        gameActive = false; racing = false;
+        highScores.push(score); highScores.sort((a,b) => b-a); highScores = highScores.slice(0, 5);
+        localStorage.setItem('f1_rank_v2', JSON.stringify(highScores));
+        document.getElementById('death-reason').innerText = reason;
+        document.getElementById('final-score').innerText = score;
+        document.getElementById('lose-screen').classList.remove('hidden');
+        document.getElementById('mobile-controls').classList.add('hidden');
+        document.getElementById('record-alert').classList.add('hidden');
+    }
+
+    document.getElementById('start-btn').onclick = () => {
+        let d = document.getElementById('diff-select').value;
+        if(d === 'easy') { speed = 5; spawnRate = 0.02; aiAggression = 0.3; }
+        if(d === 'medium') { speed = 8; spawnRate = 0.035; aiAggression = 0.7; }
+        if(d === 'hard') { speed = 12; spawnRate = 0.055; aiAggression = 1.8; }
+        document.getElementById('best').innerText = highScores[0];
+        document.getElementById('start-screen').classList.add('hidden');
+        document.getElementById('hud').classList.remove('hidden');
+        document.getElementById('mobile-controls').classList.remove('hidden');
+        gameActive = true; loop(); startSequence();
+    };
+
+    window.onkeydown = e => keys[e.key] = true; window.onkeyup = e => keys[e.key] = false;
+    const setBtn = (id, k) => {
+        const b = document.getElementById(id);
+        b.onmousedown = b.ontouchstart = (e) => { e.preventDefault(); keys[k] = true; };
+        b.onmouseup = b.onmouseleave = b.ontouchend = () => keys[k] = false;
+    };
+    setBtn('btn-left', 'ArrowLeft'); setBtn('btn-right', 'ArrowRight');
+</script>
+</body>
+</html>
